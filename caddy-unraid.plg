@@ -241,8 +241,12 @@ function h($value) {
                 placeholder="Loading Caddyfile..."
             ></textarea>
 
-            <div style="display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:10px; margin-top:12px;">
-                <span id="caddyfileMessage" class="text-muted">Loading Caddyfile...</span>
+            <div style="display:flex; justify-content:space-between; align-items:center; gap:10px; margin-top:12px;">
+		<div id="caddyfileMessage" class="text-muted" 
+	  	     style="flex:1; min-width:0; height:60px;
+		     overflow-y:auto; overflow-x:hidden; overflow-wrap:anywhere; font-size:12px; ">
+		    Loading Caddyfile...
+		</div>
                 <div style="display:flex; gap:8px;">
                     <button type="button" id="reloadCaddyfile" class="btn btn-default" style="width: 100px;">
                         <i class="fa fa-refresh"></i> Reload
@@ -689,12 +693,21 @@ if ($action === "save_caddyfile") {
 
     $caddyBinary = "/usr/local/emhttp/plugins/caddy-unraid/caddy-unraid";
 
-    $command = escapeshellarg($caddyBinary)
+    $config = json_decode(file_get_contents($configFile), true) ?: [];
+
+    $email = $config["Email"] ?? "";
+    $apiKey = $config["DNS API Key"] ?? "";
+
+    $command = "EMAIL=" . escapeshellarg($email)
+         . " API_KEY=" . escapeshellarg($apiKey)
+         . " XDG_CONFIG_HOME=" . escapeshellarg("$pluginDir/config")
+         . " XDG_DATA_HOME=" . escapeshellarg($pluginDir)
+         . " " . escapeshellarg($caddyBinary)
          . " validate --config "
          . escapeshellarg($tempFile)
          . " --adapter caddyfile 2>&1";
 
-    exec($command, $validationOutput, $validationCode);
+    exec($command, $validationOutput, $validationCode);    
 
     if ($validationCode !== 0) {
         @unlink($tempFile);
@@ -1047,4 +1060,3 @@ printf '%s\n' \
 </CHANGES>
 
 </PLUGIN>
-
