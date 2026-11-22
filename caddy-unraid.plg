@@ -1,0 +1,1050 @@
+<?xml version="1.0" standalone="yes"?>
+<!DOCTYPE PLUGIN [
+  <!ENTITY name		"caddy-unraid">
+  <!ENTITY author	"richard-zed">
+  <!ENTITY version	"2026.11.21">
+  <!ENTITY pluginURL	"https://github.com/richard-zed/&name;.plg">
+  <!ENTITY pluginLOC	"/boot/config/plugins/&name;">
+  <!ENTITY emhttpLOC	"/usr/local/emhttp/plugins/&name;">
+  <!ENTITY dataLOC	"&pluginLOC;/data">
+  <!ENTITY launch	"Settings/CaddySettings">
+]>
+
+<PLUGIN name="&name;"
+        author="&author;"
+        version="&version;"
+        pluginURL="&pluginURL;"
+	launch="&launch;"
+>
+
+<!-- /build.sh -->
+<FILE Name="&emhttpLOC;/build.sh">
+<INLINE>
+#!/bin/bash
+set -eo pipefail
+
+CONFIG="&pluginLOC;/&name;.json"
+if [[ ! -f "$CONFIG" ]]; then
+  logger -t &name; "Configuration file not found: $CONFIG. Edit configuration at Settings/Caddy. Halting."
+  exit 1
+fi
+DNS_NAME=$(jq -r '.["DNS Name"] // empty' "$CONFIG")
+DNS_MODULE=$(jq -r '.["DNS Module Git URL"] // empty' "$CONFIG")
+
+if [[ -z "$DNS_NAME" || -z "$DNS_MODULE" ]]; then
+    echo "DNS provider name or module URL is missing."
+    exit 1
+fi
+
+WORK_DIR="$(mktemp -d /tmp/caddy-build.XXXXXX)"
+export GOOS="linux"
+export GOARCH="amd64"
+export GOPATH="$WORK_DIR/gopath"
+export GOBIN="$WORK_DIR/bin"
+export PATH="$GOBIN":"$PATH"
+mkdir -p "$GOPATH" "$GOBIN"
+cd "$WORK_DIR"
+
+trap 'rm -rf "$WORK_DIR"' EXIT
+
+GO_FILE_INFO="$(curl -fsSL 'https://go.dev/dl/?mode=json' |
+  jq -r '[.[0].files[] | select(.os=="linux" and .arch=="amd64" and .kind=="archive")][0] |
+    [.filename, .sha256] | @tsv')"
+GO_FILE="$(printf '%s' "$GO_FILE_INFO" | cut -f1)"
+GO_SHA256="$(printf '%s' "$GO_FILE_INFO" | cut -f2)"
+
+curl -fL "https://go.dev/dl/$GO_FILE" -o "$WORK_DIR/$GO_FILE"
+echo "$GO_SHA256 $WORK_DIR/$GO_FILE" | sha256sum -c -
+
+tar -C "$WORK_DIR" --strip-components=1 -xzf "$WORK_DIR/$GO_FILE"
+
+go install github.com/caddyserver/xcaddy/cmd/xcaddy@latest
+
+"$GOBIN/xcaddy" build \
+  --with "$DNS_MODULE" \
+  --output "$WORK_DIR/&name;.new"
+
+"$WORK_DIR/&name;.new" list-modules |
+  grep -Fxq "dns.providers.$DNS_NAME" || {
+    echo "Build did not contain dns.providers.$DNS_NAME; existing binary was left unchanged."
+    exit 1
+  }
+
+install -m 0755 "$WORK_DIR/&name;.new" "&pluginLOC;/&name;.new"
+mv -fv "&pluginLOC;/&name;.new" "&pluginLOC;/&name;"
+printf '%s\n' \
+'┎──────────────────────────────────────────┒' \
+'┃                                          ┃' \
+'┃               Caddy built.               ┃ :(' \
+'┃                                          ┃' \
+'┖──────────────────────────────────────────┚' \
+</INLINE>
+</FILE>
+<!-- /build.sh -->
+
+<!-- Caddy.page -->
+<FILE Name="&emhttpLOC;/Caddy.page">
+<INLINE>
+<![CDATA[
+Menu="Utilities"
+Title="Caddy"
+Type="xmenu"
+Icon="server"
+---
+<?php
+error_reporting(E_ALL);
+ini_set('display_errors', '1');
+
+$pluginDir = "/boot/config/plugins/caddy-unraid";
+$configFile = "$pluginDir/caddy-unraid.json";
+$rcScript = "/usr/local/bin/rc.caddy-unraid";
+
+$status = "Unknown";
+
+// Load Unraid CSRF token
+$var = parse_ini_file("/var/local/emhttp/var.ini");
+$csrfToken = $var["csrf_token"] ?? "";
+
+if (!is_dir($pluginDir)) {
+    mkdir($pluginDir, 0755, true);
+}
+
+$fields = [
+    "Email" => "email",
+    "DNS Name" => "dns_name",
+    "DNS Module Git URL" => "dns_module_git_url",
+    "DNS API Key" => "dns_api_key",
+];
+
+$config = array_fill_keys(array_keys($fields), "");
+
+if (file_exists($configFile)) {
+    $saved = json_decode(file_get_contents($configFile), true);
+
+    if (is_array($saved)) {
+        $config = array_merge($config, $saved);
+    }
+}
+
+// Get service status
+if (file_exists($rcScript)) {
+    $statusOutput = [];
+    $statusCode = 1;
+
+    exec(
+        escapeshellarg($rcScript) . " status 2>&1",
+        $statusOutput,
+        $statusCode
+    );
+
+    $statusText = implode("\n", $statusOutput);
+    $status = stripos($statusText, "building") !== false
+        ? "Building"
+        : ($statusCode === 0 ? "Running" : "Stopped");
+}
+
+function h($value) {
+    return htmlspecialchars((string)$value, ENT_QUOTES, "UTF-8");
+}
+
+?>
+
+<div class="max-width" style="max-width:900px; margin:auto;">
+    <!-- Service controls -->
+    <div class="panel panel-default">
+        <div class="panel-body">
+            <div style="display:flex; justify-content:center; flex-wrap:wrap; gap:8px;">
+                <button type="button" class="btn btn-primary caddy-action" style="width: 120px;" data-action="start">
+                    <i class="fa fa-play"></i> Start
+                </button>
+
+                <button type="button" class="btn btn-primary caddy-action" style="width: 120px;" data-action="stop">
+                    <i class="fa fa-stop"></i> Stop
+                </button>
+
+                <button type="button" class="btn btn-primary caddy-action" style="width: 120px;" data-action="restart">
+                    <i class="fa fa-refresh"></i> Restart
+                </button>
+
+                <button type="button" class="btn btn-primary caddy-action" style="width: 120px;" data-action="build">
+                    <i class="fa fa-wrench"></i> Build
+                </button>
+            </div>
+            <div class="status-group" 
+		style="display:flex; justify-content:center; align-items:center; gap: 6px; margin-top: 24px; margin-bottom:72px; min-height: 32px;">
+                <label class="control-label" style="margin: 0; font-size: 14px; line-height: 20px">Status:</label>
+		<span id="caddyStatus"
+		    style="font-size: 14px; line-height: 20px; padding: 3px 8px; display:inline-block;"
+    		    class="label <?= $status === 'Running' ? 'label-success' : ($status === 'Building' ? 'label-warning' : 'label-danger') ?>">
+    <?= h($status) ?>
+		</span>
+            </div>
+        </div>
+    </div>
+
+    <!-- Settings -->
+    <form method="POST" id="settingsForm">
+        <div class="panel panel-default">
+            <div class="panel-body">
+                <?php foreach ($fields as $key => $postKey): ?>
+                    <div class="form-group" style="display:flex; justify-content:center; align-items:center; gap:8px; max-width:500px; margin:0 auto 16px;">
+                        <label class="control-label"
+                            style="text-align:right; flex-shrink:0; margin:0; width:128px;">
+                            <?= h($key) ?>
+                        </label>
+                        <input
+                            type="<?= $postKey === 'dns_api_key' ? 'password' : 'text' ?>"
+                            class="form-control"
+                            name="<?= h($postKey) ?>"
+                            value="<?= $postKey === 'dns_api_key' ? '' : h($config[$key]) ?>"
+                            <?= $postKey === 'dns_api_key' && !empty($config[$key]) ? 'placeholder="Saved — leave blank to keep it"' : '' ?>
+                        >
+                    </div>
+                <?php endforeach; ?>
+            </div>
+        </div>
+        <div class="form-actions" style="display:flex; justify-content:center; margin-top:24px;">
+            <button type="submit" id="saveButton" class="btn btn-primary" style="width: 100px;">
+                <i class="fa fa-save"></i> Save
+            </button>
+        </div>
+    </form>
+
+    <!-- AJAX feedback -->
+    <div id="jsonMessage"
+        style="max-width:600px; min-height: 24px; margin:6px auto 0; text-align:center;">
+    </div>
+
+    <!-- Caddyfile Editor -->
+    <div class="panel panel-default" style="margin-top:24px;">
+        <div class="panel-heading">
+            <strong><i class="fa fa-file-code-o"></i> Caddyfile Editor</strong>
+        </div>
+
+        <div class="panel-body">
+            <textarea
+                id="caddyfileEditor"
+                class="form-control"
+                spellcheck="false"
+                wrap="off"
+                style="
+                    width:100%;
+                    min-height:550px;
+                    font-family:monospace;
+                    font-size:13px;
+                    line-height:1.5;
+                    resize:vertical;
+                    white-space:pre;
+                    overflow:auto;
+                    tab-size:4;
+                "
+                placeholder="Loading Caddyfile..."
+            ></textarea>
+
+            <div style="display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:10px; margin-top:12px;">
+                <span id="caddyfileMessage" class="text-muted">Loading Caddyfile...</span>
+                <div style="display:flex; gap:8px;">
+                    <button type="button" id="reloadCaddyfile" class="btn btn-default" style="width: 100px;">
+                        <i class="fa fa-refresh"></i> Reload
+                    </button>
+
+                    <button type="button" id="saveCaddyfile" class="btn btn-primary" style="width: 100px;">
+                        <i class="fa fa-save"></i> Save
+                    </button>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+<script>
+$(function() {
+    const apiUrl = "/plugins/caddy-unraid/api.php";
+    const csrfToken = <?= json_encode($var['csrf_token'] ?? '') ?>;
+
+    function updateCaddyStatus() {
+	$.post(apiUrl, {
+            csrf_token: csrfToken,
+            action: "status"
+        }, function(response) {
+	    if (!response.success || !response.status) {
+                return;
+            }
+            const status = $("#caddyStatus");
+
+	     const displayStatus = response.status === "Building"
+                ? "Building..."
+                : response.status;
+
+            if (status.text().trim() !== displayStatus) {
+                status
+  	 	    .stop(true, true)
+		    .fadeTo(200, 0, function() {
+  		        status.text(displayStatus)
+                        .removeClass("label-success label-danger label-warning label-default")
+                        .addClass(
+                            response.status === "Running"
+                                ? "label-success"
+                                : response.status === "Building"
+                                    ? "label-warning"
+                                    : "label-danger"
+                        )
+  	  	        .fadeTo(200, 1)
+                    });
+            }
+        }, "json")
+
+	.fail(function(xhr) {
+	    console.error("Caddy status error:", xhr.responseText);
+	})
+
+	.always(function() {
+	    setTimeout(updateCaddyStatus, 200);
+	});
+    }
+
+    function showJsonMessage(success, message) {
+        const alert = $("<div>")
+            .addClass("alert")
+            .addClass(success ? "alert-success" : "alert-danger")
+            .text(message);
+
+	$("#jsonMessage")
+	    .stop(true, true)
+	    .empty()
+	    .append(alert)
+	    .css("opacity", 0)
+	    .fadeTo(200, 1)
+	    .delay(6000)
+	    .fadeTo(1000, 0);
+    }
+
+    function showCaddyfileMessage(success, message) {
+	const alert = $("<div>")
+            .addClass("alert")
+            .addClass(success ? "alert-success" : "alert-danger")
+            .text(message);
+
+        $("#caddyfileMessage")
+            .stop(true, true)
+            .empty()
+	    .append(alert)
+	    .css("opacity", 0)
+            .fadeTo(200, 1)
+            .delay(6000)
+            .fadeTo(1000, 0);
+    }
+
+    // Save settings .json.
+    $("#settingsForm")
+        .off("submit.caddy")
+        .on("submit.caddy", function(e) {
+            e.preventDefault();
+
+            const button = $("#saveButton");
+            button.prop("disabled", true).html('<i class="fa fa-spinner fa-spin"></i> Saving...');
+
+	    const formData = {
+ 	        email: $("#settingsForm [name='email']").val(),
+   	        dns_name: $("#settingsForm [name='dns_name']").val(),
+	        dns_module_git_url: $("#settingsForm [name='dns_module_git_url']").val(),
+	        dns_api_key: $("#settingsForm [name='dns_api_key']").val(),
+	        csrf_token: csrfToken,
+	        action: "save"
+ 	    };
+
+            $.ajax({
+                url: apiUrl,
+                method: "POST",
+                data: formData,
+                dataType: "json"
+	    })
+
+            .done(function(response) {
+                showJsonMessage(response.success, response.message);
+            })
+
+            .fail(function(xhr, status, error) {
+                console.error("Save error:", xhr.responseText);
+                showJsonMessage(false,
+		    xhr.status === 403
+                        ? "CSRF validation failed. Refresh the page."
+                        : "Unable to save settings: " + error);
+            })
+
+            .always(function() {
+                button.prop("disabled", false)
+                    .html('<i class="fa fa-save"></i> Save');
+            });
+        });
+
+
+    // Start / Stop / Restart / Build
+    $(".caddy-action")
+        .off("click.caddy")
+        .on("click.caddy", function() {
+            const button = $(this);
+            const action = button.data("action");
+
+            if ($(".caddy-action:disabled").length) {
+                return;
+            }
+
+            const originalContent = button.html();
+
+            $(".caddy-action").prop("disabled", true);
+
+            button.html(
+                '<i class="fa fa-spinner fa-spin"></i> Working...'
+            );
+
+            $.ajax({
+                url: apiUrl,
+                method: "POST",
+                data: {
+                    csrf_token: csrfToken,
+                    action: action
+                },
+                dataType: "json"
+            })
+
+            .done(function(response) {
+                if (response.status) {
+		    updateCaddyStatus()
+                }
+            })
+
+            .fail(function(xhr, status, error) {
+                console.error("Caddy service error:", xhr.responseText);
+            })
+
+            .always(function() {
+                button.html(originalContent);
+                $(".caddy-action").prop("disabled", false);
+            });
+        });
+    
+function loadCaddyfile() {
+    const status = $("#caddyfileMessage");
+    status.text("Loading...");
+
+    $.post(apiUrl, {
+        csrf_token: csrfToken,
+        action: "load_caddyfile"
+    }, null, "json")
+
+    .done(function(response) {
+        if (!response.success) {
+            showCaddyfileMessage(false, response.message);
+            return;
+        }
+        $("#caddyfileEditor").val(response.content);
+        showCaddyfileMessage(true, response.message);
+    })
+
+    .fail(function(xhr) {
+        console.error("Caddyfile load error:", xhr.responseText);
+        showCaddyfileMessage(false, "Unable to load Caddyfile.");
+    });
+}
+
+// Save Caddyfile
+$("#saveCaddyfile")
+    .off("click.caddy")
+    .on("click.caddy", function() {
+        const button = $(this);
+        const content = $("#caddyfileEditor").val();
+
+        button.prop("disabled", true)
+            .html('<i class="fa fa-spinner fa-spin"></i> Saving...');
+
+        $("#caddyfileMessage").text("Saving...");
+
+        $.post(apiUrl, {
+            csrf_token: csrfToken,
+            action: "save_caddyfile",
+            caddyfile: content
+        }, null, "json")
+
+        .done(function(response) {
+            if (response.success) {
+                showCaddyfileMessage(true, response.message);
+            } else {
+                showCaddyfileMessage(false, response.message);
+            }
+        })
+
+        .fail(function(xhr, status, error) {
+            console.error("Caddyfile save error:", xhr.responseText);
+            showCaddyfileMessage(false, "Unable to save Caddyfile: " + error);
+        })
+
+        .always(function() {
+            button.prop("disabled", false).html('<i class="fa fa-save"></i> Save');
+        });
+    });
+
+
+// Reload Caddyfile
+$("#reloadCaddyfile")
+    .off("click.caddy")
+    .on("click.caddy", function() {
+        if (!confirm("Discard unsaved changes and reload the Caddyfile?")) {
+            return;
+        }
+        loadCaddyfile();
+    });
+
+// Load when page opens
+loadCaddyfile();
+
+});
+</script>
+]]>
+</INLINE>
+</FILE>
+<!-- /Caddy.page -->
+
+<!-- api.php -->
+<FILE Name="&emhttpLOC;/api.php">
+<INLINE>
+
+<![CDATA[
+<?php
+header("Content-Type: application/json; charset=utf-8");
+
+function respond($success, $message, $extra = []) {
+
+    echo json_encode(array_merge([
+        "success" => $success,
+        "message" => $message
+    ], $extra));
+
+    exit;
+}
+
+if ($_SERVER["REQUEST_METHOD"] !== "POST") {
+    http_response_code(405);
+    respond(false, "Method not allowed.");
+}
+
+$var = parse_ini_file("/var/local/emhttp/var.ini");
+
+$rawBody = file_get_contents("php://input");
+$rawPost = [];
+parse_str($rawBody, $rawPost);
+$post = array_merge($rawPost, $_POST);
+
+$expectedToken = $var["csrf_token"] ?? "";
+$submittedToken = $post["csrf_token"] ?? "";
+
+if (
+    empty($expectedToken) ||
+    empty($submittedToken) ||
+    !hash_equals($expectedToken, $submittedToken)
+) {
+    http_response_code(403);
+    respond(false, "Invalid CSRF token. Refresh the page.");
+}
+
+$pluginDir = "/boot/config/plugins/caddy-unraid";
+$configFile = "$pluginDir/caddy-unraid.json";
+$rcScript = "/usr/local/bin/rc.caddy-unraid";
+
+$action = $post["action"] ?? "";
+
+if ($action === "status") {
+
+    if (!is_executable($rcScript)) {
+        http_response_code(500);
+        respond(false, "Caddy service script is missing.");
+    }
+
+    set_time_limit(25);
+
+    $getStatus = function() use ($rcScript) {
+        $output = [];
+        $code = 1;
+
+        exec(
+            escapeshellarg($rcScript) . " status 2>&1",
+            $output,
+            $code
+        );
+
+        $statusText = implode("\n", $output);
+        if (stripos($statusText, "building") !== false) {
+            return "Building";
+        }
+        return $code === 0 ? "Running" : "Stopped";
+    };
+
+    $initialStatus = $getStatus();
+    $status = $initialStatus;
+
+    for ($i = 0; $i < 20; $i++) {
+        sleep(1);
+        $status = $getStatus();
+        if ($status !== $initialStatus) {
+            break;
+        }
+    }
+
+    respond(true, "Status: " . $status, [
+        "status" => $status
+    ]);
+}
+
+if ($action === "save") {
+
+    $fields = [
+        "Email" => "email",
+        "DNS Name" => "dns_name",
+        "DNS Module Git URL" => "dns_module_git_url",
+        "DNS API Key" => "dns_api_key"
+    ];
+
+    $config = [];
+
+    if (file_exists($configFile)) {
+        $saved = json_decode(
+            file_get_contents($configFile),
+            true
+        );
+        if (is_array($saved)) {
+            $config = $saved;
+        }
+    }
+
+    foreach ($fields as $jsonKey => $postKey) {
+        $value = trim($post[$postKey] ?? "");
+        // Preserve existing API key when blank
+        if ($jsonKey !== "DNS API Key" || $value !== "") {
+            $config[$jsonKey] = $value;
+        }
+    }
+
+    $output = json_encode(
+        $config,
+        JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES
+    );
+
+    if ($output === false) {
+        respond(false, "Unable to encode configuration.");
+    }
+
+    if (!is_dir($pluginDir)) {
+        respond(false, "Configuration directory does not exist.");
+    }
+
+    $tempFile = $configFile . ".tmp";
+
+    if (file_put_contents($tempFile, $output, LOCK_EX) === false) {
+        respond(false, "Unable to write configuration.");
+    }
+
+    chmod($tempFile, 0600);
+
+    if (!rename($tempFile, $configFile)) {
+        @unlink($tempFile);
+        respond(false, "Unable to replace configuration.");
+    }
+    respond(true, "Settings saved successfully.");
+}
+
+// Caddyfile Save / Reload
+$caddyfilePath = "$pluginDir/Caddyfile";
+
+if ($action === "load_caddyfile") {
+
+    if (!file_exists($caddyfilePath)) {
+        respond(false, "Caddyfile does not exist.");
+    }
+
+    $content = file_get_contents($caddyfilePath);
+
+    if ($content === false) {
+        respond(false, "Unable to read Caddyfile.");
+    }
+
+    respond(true, "Caddyfile loaded.", [
+        "content" => $content
+    ]);
+}
+
+if ($action === "save_caddyfile") {
+
+    $content = $post["caddyfile"] ?? null;
+
+    if (!is_string($content)) {
+        respond(false, "Missing Caddyfile content.");
+    }
+
+    $tempFile = $caddyfilePath . ".tmp";
+
+    if (file_put_contents($tempFile, $content, LOCK_EX) === false) {
+        respond(false, "Unable to write Caddyfile.");
+    }
+
+    chmod($tempFile, 0600);
+
+    $caddyBinary = "/usr/local/emhttp/plugins/caddy-unraid/caddy-unraid";
+
+    $command = escapeshellarg($caddyBinary)
+         . " validate --config "
+         . escapeshellarg($tempFile)
+         . " --adapter caddyfile 2>&1";
+
+    exec($command, $validationOutput, $validationCode);
+
+    if ($validationCode !== 0) {
+        @unlink($tempFile);
+        respond(false, "Caddyfile validation failed:\n"
+            . implode("\n", $validationOutput));
+    }
+
+    if (!rename($tempFile, $caddyfilePath)) {
+        @unlink($tempFile);
+        respond(false, "Unable to replace Caddyfile.");
+    }
+
+    respond(true, "Caddyfile saved successfully.");
+}
+
+// Service actions
+$allowedActions = [
+    "start",
+    "stop",
+    "restart",
+    "build"
+];
+
+if (!in_array($action, $allowedActions, true)) {
+    http_response_code(400);
+    respond(false, "Invalid action.");
+}
+
+if (!is_executable($rcScript)) {
+    http_response_code(500);
+    respond(false, "Caddy service script is missing or not executable.");
+}
+
+set_time_limit(0);
+
+$output = [];
+$returnCode = 0;
+
+$command = escapeshellarg($rcScript)
+         . " "
+         . escapeshellarg($action)
+         . " 2>&1";
+
+exec($command, $output, $returnCode);
+
+$message = implode("\n", $output);
+
+if ($returnCode !== 0) {
+    respond(false, ucfirst($action) . " failed: " . $message);
+}
+
+// Verify final service status
+$statusOutput = [];
+$statusCode = 1;
+
+exec(
+    escapeshellarg($rcScript) . " status 2>&1",
+    $statusOutput,
+    $statusCode
+);
+
+$statusText = implode("\n", $statusOutput);
+$status = stripos($statusText, "building") !== false
+    ? "Building"
+    : ($statusCode === 0 ? "Running" : "Stopped");
+
+if (
+    ($action === "start" || $action === "restart")
+    && $status !== "Running"
+) {
+    respond(false, ucfirst($action) . " command succeeded, but Caddy is not running.", [
+        "output" => $message,
+        "status" => $status
+    ]);
+}
+
+if ($action === "stop" && $status !== "Stopped") {
+    respond(false, "Stop command succeeded, but Caddy is still running.", [
+        "output" => $message,
+        "status" => $status
+    ]);
+}
+
+respond(true, ucfirst($action) . " completed successfully.", [
+    "output" => $message,
+    "status" => $status
+]);
+]]>
+</INLINE>
+</FILE>
+<!-- /api.php -->
+
+<!-- rc.caddy-unraid -->
+<FILE Name="&emhttpLOC;/rc.&name;">
+<INLINE>
+#!/bin/bash
+PERSISTENT_BINARY="&pluginLOC;/&name;"
+TEMPORARY_BINARY="&emhttpLOC;/&name;"
+CONFIG="&pluginLOC;/&name;.json"
+PIDFILE="/var/run/&name;.pid"
+LOGFILE="/var/log/&name;.log"
+
+BUILDING_FILE="/var/run/&name;.building"
+START_TIMEOUT=10
+STOP_TIMEOUT=30
+
+# Verify that a PID belongs to our Caddy binary.
+is_caddy_pid() {
+    local pid="$1"
+    local process
+
+    [[ "$pid" =~ ^[0-9]+$ ]] || return 1
+    kill -0 "$pid" 2&gt;/dev/null || return 1
+
+    process=$(readlink -f "/proc/$pid/exe" 2&gt;/dev/null) || return 1
+
+    [[ "$process" == "$(readlink -f "$TEMPORARY_BINARY")" ]]
+}
+
+get_caddy_pid() {
+    [[ -f "$PIDFILE" ]] || return 1
+
+    local pid=$(cat "$PIDFILE" 2&gt;/dev/null)
+
+    if is_caddy_pid "$pid"; then
+        echo "$pid"
+        return 0
+    fi
+
+    rm -f "$PIDFILE"
+    return 1
+}
+
+is_running() {
+    get_caddy_pid &gt; /dev/null
+}
+
+start_service() {
+    if is_running; then
+        echo "Caddy is already running."
+        return 0
+    fi
+
+    if [[ ! -f "$PERSISTENT_BINARY" ]]; then
+        echo "Caddy binary not found. Building..."
+        build_service || return 1
+    fi
+
+    if [[ ! -f "$PERSISTENT_BINARY" ]]; then
+        echo "Build did not produce a Caddy binary."
+        return 1
+    fi
+
+    install -m 0755 "$PERSISTENT_BINARY" "$TEMPORARY_BINARY" || return 1
+
+    EMAIL=$(jq -r '.Email // empty' "$CONFIG") \
+    API_KEY=$(jq -r '.["DNS API Key"] // empty' "$CONFIG") \
+    XDG_CONFIG_HOME="&pluginLOC;/config" \
+    XDG_DATA_HOME="&pluginLOC;" \
+    "$TEMPORARY_BINARY" run --config "&pluginLOC;/Caddyfile" \
+        &gt;&gt; "$LOGFILE" 2&gt;&amp;1 &amp;
+
+    local pid=$!
+    echo "$pid" &gt; "$PIDFILE"
+    
+    for ((i=0; i&lt;START_TIMEOUT; i++)); do
+        if is_caddy_pid "$pid"; then
+            echo "Caddy started successfully (PID $pid)."
+            return 0
+        fi
+
+        if ! kill -0 "$pid" 2&gt;/dev/null; then
+            rm -f "$PIDFILE"
+            echo "Caddy exited during startup. Check $LOGFILE."
+            return 1
+        fi
+        sleep 1
+    done
+
+    echo "Caddy startup timed out."
+    return 1
+}
+
+stop_service() {
+    local pid
+    pid=$(get_caddy_pid) || {
+        rm -f "$PIDFILE"
+        echo "Caddy is not running."
+        return 0
+    }
+
+    echo "Stopping Caddy (PID $pid)..."
+
+    kill -TERM "$pid" || {
+        echo "Unable to send SIGTERM to Caddy."
+        return 1
+    }
+
+    for ((i=0; i&lt;STOP_TIMEOUT; i++)); do
+        if ! is_caddy_pid "$pid"; then
+            rm -f "$PIDFILE"
+            echo "Caddy stopped successfully."
+            return 0
+        fi
+        sleep 1
+    done
+
+    echo "Caddy did not stop within ${STOP_TIMEOUT}s. Forcing..."
+
+    kill -KILL "$pid"
+
+    for i in {1..10}; do
+        if ! is_running; then
+            rm -f "$PIDFILE"
+            echo "Caddy forcefully stopped."
+            return 0
+        fi
+        sleep 1
+    done
+
+    echo "Caddy did not stop in time."
+    return 1
+}
+
+
+build_service() {
+    echo "Building Caddy..."
+
+    touch "$BUILDING_FILE" || {
+        echo "Unable to create build status marker."
+        return 1
+    }
+
+    trap 'rm -f "$BUILDING_FILE"' EXIT INT TERM
+
+    &emhttpLOC;/build.sh
+    local build_result=$?
+
+    if [[ $build_result -ne 0 ]]; then
+        rm -f "$BUILDING_FILE"
+        echo "Build failed. Existing binary was preserved."
+        return 1
+    fi
+
+    echo "Build successful."
+
+    if is_running; then
+        echo "Restarting Caddy with new binary..."
+        restart_service
+        local restart_result=$?
+
+        rm -f "$BUILDING_FILE"
+        return $restart_result
+    fi
+    return 0
+}
+
+restart_service() {
+    stop_service || return 1
+    start_service
+}
+
+status_service() {
+    local pid    
+    if [[ -f "$BUILDING_FILE" ]]; then
+        echo "Caddy is building..."
+        return 0
+    elif pid=$(get_caddy_pid); then
+	echo "Caddy is running. (PID: $pid)"
+	return 0
+    else
+	echo "Caddy is not running."
+	return 1
+    fi
+}
+
+case "$1" in
+    start)
+        start_service
+        ;;
+    stop)
+        stop_service
+        ;;
+    restart)
+        restart_service
+        ;;
+    build)
+        build_service
+        ;;
+    status)
+        status_service
+        ;;
+    *)
+        echo "Usage: $0 {start|stop|restart|build|status}"
+        exit 1
+        ;;
+esac
+</INLINE>
+</FILE>
+<!-- /rc.caddy-unraid -->
+
+<!-- Install script -->
+<FILE Run="/bin/bash">
+<INLINE>
+mkdir -p &pluginLOC;/config
+mkdir -p &pluginLOC;/data
+touch "&pluginLOC;/Caddyfile"
+install -m 0755 "&emhttpLOC;/rc.&name;" /usr/local/bin/rc.&name;
+chmod 0755 "&emhttpLOC;/rc.&name;"
+chmod 0755 "&emhttpLOC;/build.sh"
+
+rc.&name; start
+
+printf '%s\n' \
+'┎──────────────────────────────────────────┒' \
+'┃                                          ┃' \
+'┃             Caddy installed.             ┃ :(' \
+'┃                                          ┃' \
+'┠──────────────────────────────────────────┨' \
+'┃       Configure at Settings/Caddy.       ┃ :(' \
+'┖──────────────────────────────────────────┚' \
+</INLINE>
+</FILE>
+<!-- /Install script -->
+
+<!-- Uninstall script -->
+<FILE Run="/bin/bash" Method="remove">
+<INLINE>
+/usr/local/bin/rc.&name; stop
+rm -rf /usr/local/bin/rc.&name;
+rm -rf &emhttpLOC;
+rm -rf &pluginLOC;/config
+rm -rf &pluginLOC;/*.sh
+rm -f /var/run/&name;.pid
+rm -f /var/run/&name;.building
+
+printf '%s\n' \
+'┎──────────────────────────────────────────┒' \
+'┃                                          ┃' \
+'┃            Caddy uninstalled.            ┃ :(' \
+'┃                                          ┃' \
+'┖──────────────────────────────────────────┚' \
+</INLINE>
+</FILE>
+<!-- /Uninstall script -->
+
+<CHANGES>
+### &version;
+ - Initial release.
+</CHANGES>
+
+</PLUGIN>
+
