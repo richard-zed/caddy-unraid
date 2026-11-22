@@ -3,7 +3,8 @@
   <!ENTITY name		"caddy-unraid">
   <!ENTITY author	"richard-zed">
   <!ENTITY version	"2026.11.21">
-  <!ENTITY pluginURL	"https://github.com/richard-zed/&name;.plg">
+  <!ENTITY projectURL	"https://github.com/richard-zed/&name;">
+  <!ENTITY pluginURL	"https://raw.githubusercontent.com/richard-zed/main/&name;.plg">
   <!ENTITY pluginLOC	"/boot/config/plugins/&name;">
   <!ENTITY emhttpLOC	"/usr/local/emhttp/plugins/&name;">
   <!ENTITY dataLOC	"&pluginLOC;/data">
