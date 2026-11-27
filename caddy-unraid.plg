@@ -2,12 +2,10 @@
 <!DOCTYPE PLUGIN [
   <!ENTITY name		"caddy-unraid">
   <!ENTITY author	"richard-zed">
-  <!ENTITY version	"2026.11.21">
-  <!ENTITY projectURL	"https://github.com/richard-zed/&name;">
-  <!ENTITY pluginURL	"https://raw.githubusercontent.com/richard-zed/main/&name;.plg">
-  <!ENTITY pluginLOC	"/boot/config/plugins/&name;">
-  <!ENTITY emhttpLOC	"/usr/local/emhttp/plugins/&name;">
-  <!ENTITY dataLOC	"&pluginLOC;/data">
+  <!ENTITY version	"2026.11.27">
+  <!ENTITY pluginURL	"https://github.com/richard-zed/&name;.plg">
+  <!ENTITY bootDir	"/boot/config/plugins/&name;">
+  <!ENTITY installDir	"/usr/local/emhttp/plugins/&name;">
   <!ENTITY launch	"Settings/CaddySettings">
 ]>
 
@@ -19,12 +17,12 @@
 >
 
 <!-- /build.sh -->
-<FILE Name="&emhttpLOC;/build.sh">
+<FILE Name="&installDir;/build.sh">
 <INLINE>
 #!/bin/bash
 set -eo pipefail
 
-CONFIG="&pluginLOC;/&name;.json"
+CONFIG="&bootDir;/&name;.json"
 if [[ ! -f "$CONFIG" ]]; then
   logger -t &name; "Configuration file not found: $CONFIG. Edit configuration at Settings/Caddy. Halting."
   exit 1
@@ -71,8 +69,8 @@ go install github.com/caddyserver/xcaddy/cmd/xcaddy@latest
     exit 1
   }
 
-install -m 0755 "$WORK_DIR/&name;.new" "&pluginLOC;/&name;.new"
-mv -fv "&pluginLOC;/&name;.new" "&pluginLOC;/&name;"
+install -m 0755 "$WORK_DIR/&name;.new" "&bootDir;/&name;.new"
+mv -fv "&bootDir;/&name;.new" "&bootDir;/&name;"
 printf '%s\n' \
 '┎──────────────────────────────────────────┒' \
 '┃                                          ┃' \
@@ -84,13 +82,14 @@ printf '%s\n' \
 <!-- /build.sh -->
 
 <!-- Caddy.page -->
-<FILE Name="&emhttpLOC;/Caddy.page">
+<FILE Name="&installDir;/Caddy.page">
 <INLINE>
 <![CDATA[
 Menu="Utilities"
 Title="Caddy"
 Type="xmenu"
 Icon="server"
+Tag="server"
 ---
 <?php
 error_reporting(E_ALL);
@@ -152,38 +151,47 @@ function h($value) {
 
 <div class="max-width" style="max-width:900px; margin:auto;">
     <!-- Service controls -->
-    <div class="panel panel-default">
-        <div class="panel-body">
-            <div style="display:flex; justify-content:center; flex-wrap:wrap; gap:8px;">
-                <button type="button" class="btn btn-primary caddy-action" style="width: 120px;" data-action="start">
-                    <i class="fa fa-play"></i> Start
-                </button>
+    <div class="title">
+	<span class="left inline-flex flex-row items-center">
+	    <i class="fa fa-power-off title"></i> Service Controls
+	</span>
+    </div>
+    <div class="panel-body">
+        <div style="display:flex; justify-content:center; flex-wrap:wrap; gap:8px;">
+            <button type="button" class="btn btn-primary caddy-action" style="width: 120px;" data-action="start">
+                <i class="fa fa-play"></i> Start
+            </button>
 
-                <button type="button" class="btn btn-primary caddy-action" style="width: 120px;" data-action="stop">
-                    <i class="fa fa-stop"></i> Stop
-                </button>
+            <button type="button" class="btn btn-primary caddy-action" style="width: 120px;" data-action="stop">
+                <i class="fa fa-stop"></i> Stop
+            </button>
 
-                <button type="button" class="btn btn-primary caddy-action" style="width: 120px;" data-action="restart">
-                    <i class="fa fa-refresh"></i> Restart
-                </button>
+            <button type="button" class="btn btn-primary caddy-action" style="width: 120px;" data-action="restart">
+                <i class="fa fa-refresh"></i> Restart
+            </button>
 
-                <button type="button" class="btn btn-primary caddy-action" style="width: 120px;" data-action="build">
-                    <i class="fa fa-wrench"></i> Build
-                </button>
-            </div>
-            <div class="status-group" 
-		style="display:flex; justify-content:center; align-items:center; gap: 6px; margin-top: 24px; margin-bottom:72px; min-height: 32px;">
-                <label class="control-label" style="margin: 0; font-size: 14px; line-height: 20px">Status:</label>
-		<span id="caddyStatus"
-		    style="font-size: 14px; line-height: 20px; padding: 3px 8px; display:inline-block;"
-    		    class="label <?= $status === 'Running' ? 'label-success' : ($status === 'Building' ? 'label-warning' : 'label-danger') ?>">
-    <?= h($status) ?>
-		</span>
-            </div>
+            <button type="button" class="btn btn-primary caddy-action" style="width: 120px;" data-action="build">
+                <i class="fa fa-wrench"></i> Build
+            </button>
+        </div>
+        <div class="status-group" style="
+	     display:flex; justify-content:center; align-items:center; 
+             gap: 6px; margin-top: 24px; margin-bottom:72px; min-height: 32px;">
+            <label class="control-label" style="margin: 0; font-size: 14px; line-height: 20px">Status:</label>
+	    <span id="caddyStatus"
+	        style="font-size: 14px; line-height: 20px; padding: 3px 8px; display:inline-block;"
+    		class="label <?= $status === 'Running' ? 'label-success' : ($status === 'Building' ? 'label-warning' : 'label-danger') ?>">
+		    <?= h($status) ?>
+	    </span>
         </div>
     </div>
 
     <!-- Settings -->
+    <div class="title">
+        <span class="left inline-flex flex-row items-center">
+            <i class="fa fa-sliders title"></i> Environment Settings
+        </span>
+    </div>
     <form method="POST" id="settingsForm">
         <div class="panel panel-default">
             <div class="panel-body">
@@ -213,15 +221,16 @@ function h($value) {
 
     <!-- AJAX feedback -->
     <div id="jsonMessage"
-        style="max-width:600px; min-height: 24px; margin:6px auto 0; text-align:center;">
+        style="max-width:600px; min-height: 24px; margin:6px auto 0; text-align:center; font-size: 14px;">
     </div>
 
     <!-- Caddyfile Editor -->
+    <div class="title">
+        <span class="left inline-flex flex-row items-center">
+            <i class="fa fa-code title"></i> Caddyfile
+        </span>
+    </div>
     <div class="panel panel-default" style="margin-top:24px;">
-        <div class="panel-heading">
-            <strong><i class="fa fa-file-code-o"></i> Caddyfile Editor</strong>
-        </div>
-
         <div class="panel-body">
             <textarea
                 id="caddyfileEditor"
@@ -244,8 +253,9 @@ function h($value) {
 
             <div style="display:flex; justify-content:space-between; align-items:center; gap:10px; margin-top:12px;">
 		<div id="caddyfileMessage" class="text-muted" 
-	  	     style="flex:1; min-width:0; height:60px;
-		     overflow-y:auto; overflow-x:hidden; overflow-wrap:anywhere; font-size:12px; ">
+	  	     style="flex:1; min-width:0; height:80px;
+		     overflow-y:auto; overflow-x:hidden; overflow-wrap:anywhere; 
+		     font-size:14px; ">
 		    Loading Caddyfile...
 		</div>
                 <div style="display:flex; gap:8px;">
@@ -510,7 +520,7 @@ loadCaddyfile();
 <!-- /Caddy.page -->
 
 <!-- api.php -->
-<FILE Name="&emhttpLOC;/api.php">
+<FILE Name="&installDir;/api.php">
 <INLINE>
 
 <![CDATA[
@@ -802,33 +812,32 @@ respond(true, ucfirst($action) . " completed successfully.", [
 <!-- /api.php -->
 
 <!-- rc.caddy-unraid -->
-<FILE Name="&emhttpLOC;/rc.&name;">
+<FILE Name="&installDir;/rc.&name;">
 <INLINE>
 #!/bin/bash
-PERSISTENT_BINARY="&pluginLOC;/&name;"
-TEMPORARY_BINARY="&emhttpLOC;/&name;"
-CONFIG="&pluginLOC;/&name;.json"
+PERSISTENT_BINARY="&bootDir;/&name;"
+TEMPORARY_BINARY="&installDir;/&name;"
+CONFIG="&bootDir;/&name;.json"
 PIDFILE="/var/run/&name;.pid"
 LOGFILE="/var/log/&name;.log"
-
-BUILDING_FILE="/var/run/&name;.building"
-START_TIMEOUT=10
-STOP_TIMEOUT=30
+BUILDFILE="/var/run/&name;.building"
 
 # Verify that a PID belongs to our Caddy binary.
 is_caddy_pid() {
     local pid="$1"
     local process
+    local expected
 
     [[ "$pid" =~ ^[0-9]+$ ]] || return 1
     kill -0 "$pid" 2&gt;/dev/null || return 1
 
     process=$(readlink -f "/proc/$pid/exe" 2&gt;/dev/null) || return 1
+    expected=$(readlink -f "&installDir;/&name;" 2&gt;/dev/null) || return 1
 
-    [[ "$process" == "$(readlink -f "$TEMPORARY_BINARY")" ]]
+    [[ "$process" == "$expected" ]]
 }
 
-get_caddy_pid() {
+caddy_pid() {
     [[ -f "$PIDFILE" ]] || return 1
 
     local pid=$(cat "$PIDFILE" 2&gt;/dev/null)
@@ -843,18 +852,20 @@ get_caddy_pid() {
 }
 
 is_running() {
-    get_caddy_pid &gt; /dev/null
+    caddy_pid &gt; /dev/null
 }
 
-start_service() {
+lets_start() {
     if is_running; then
         echo "Caddy is already running."
         return 0
     fi
 
+    rm -f "$PIDFILE"
+
     if [[ ! -f "$PERSISTENT_BINARY" ]]; then
         echo "Caddy binary not found. Building..."
-        build_service || return 1
+        lets_build || return 1
     fi
 
     if [[ ! -f "$PERSISTENT_BINARY" ]]; then
@@ -866,35 +877,34 @@ start_service() {
 
     EMAIL=$(jq -r '.Email // empty' "$CONFIG") \
     API_KEY=$(jq -r '.["DNS API Key"] // empty' "$CONFIG") \
-    XDG_CONFIG_HOME="&pluginLOC;/config" \
-    XDG_DATA_HOME="&pluginLOC;" \
-    "$TEMPORARY_BINARY" run --config "&pluginLOC;/Caddyfile" \
+    XDG_CONFIG_HOME="&bootDir;/config" \
+    XDG_DATA_HOME="&bootDir;" \
+    "$TEMPORARY_BINARY" run --config "&bootDir;/Caddyfile" \
         &gt;&gt; "$LOGFILE" 2&gt;&amp;1 &amp;
 
     local pid=$!
     echo "$pid" &gt; "$PIDFILE"
     
-    for ((i=0; i&lt;START_TIMEOUT; i++)); do
+    for ((i=0; i&lt;10; i++)); do
+        if ! kill -0 "$pid" 2&gt;/dev/null; then
+            rm -f "$PIDFILE"
+            echo "Caddy exited during startup. Check rc.&name; log or $LOGFILE."
+            return 1
+        fi
+        sleep 1
         if is_caddy_pid "$pid"; then
             echo "Caddy started successfully (PID $pid)."
             return 0
         fi
-
-        if ! kill -0 "$pid" 2&gt;/dev/null; then
-            rm -f "$PIDFILE"
-            echo "Caddy exited during startup. Check $LOGFILE."
-            return 1
-        fi
-        sleep 1
     done
 
     echo "Caddy startup timed out."
     return 1
 }
 
-stop_service() {
+lets_stop() {
     local pid
-    pid=$(get_caddy_pid) || {
+    pid=$(caddy_pid) || {
         rm -f "$PIDFILE"
         echo "Caddy is not running."
         return 0
@@ -907,7 +917,7 @@ stop_service() {
         return 1
     }
 
-    for ((i=0; i&lt;STOP_TIMEOUT; i++)); do
+    for ((i=0; i&lt;10; i++)); do
         if ! is_caddy_pid "$pid"; then
             rm -f "$PIDFILE"
             echo "Caddy stopped successfully."
@@ -916,7 +926,7 @@ stop_service() {
         sleep 1
     done
 
-    echo "Caddy did not stop within ${STOP_TIMEOUT}s. Forcing..."
+    echo "Caddy did not stop within 10s. Forcing..."
 
     kill -KILL "$pid"
 
@@ -934,21 +944,21 @@ stop_service() {
 }
 
 
-build_service() {
+lets_build() {
     echo "Building Caddy..."
 
-    touch "$BUILDING_FILE" || {
+    touch "$BUILDFILE" || {
         echo "Unable to create build status marker."
         return 1
     }
 
-    trap 'rm -f "$BUILDING_FILE"' EXIT INT TERM
+    trap 'rm -f "$BUILDFILE"' EXIT INT TERM
 
-    &emhttpLOC;/build.sh
+    &installDir;/build.sh
     local build_result=$?
 
     if [[ $build_result -ne 0 ]]; then
-        rm -f "$BUILDING_FILE"
+        rm -f "$BUILDFILE"
         echo "Build failed. Existing binary was preserved."
         return 1
     fi
@@ -957,26 +967,26 @@ build_service() {
 
     if is_running; then
         echo "Restarting Caddy with new binary..."
-        restart_service
+        lets_restart
         local restart_result=$?
 
-        rm -f "$BUILDING_FILE"
+        rm -f "$BUILDFILE"
         return $restart_result
     fi
     return 0
 }
 
-restart_service() {
-    stop_service || return 1
-    start_service
+lets_restart() {
+    lets_stop || return 1
+    lets_start
 }
 
-status_service() {
+lets_status() {
     local pid    
-    if [[ -f "$BUILDING_FILE" ]]; then
+    if [[ -f "$BUILDFILE" ]]; then
         echo "Caddy is building..."
         return 0
-    elif pid=$(get_caddy_pid); then
+    elif pid=$(caddy_pid); then
 	echo "Caddy is running. (PID: $pid)"
 	return 0
     else
@@ -985,26 +995,19 @@ status_service() {
     fi
 }
 
+lets_log() {
+    less $LOGFILE
+}
+
 case "$1" in
-    start)
-        start_service
-        ;;
-    stop)
-        stop_service
-        ;;
-    restart)
-        restart_service
-        ;;
-    build)
-        build_service
-        ;;
-    status)
-        status_service
-        ;;
-    *)
-        echo "Usage: $0 {start|stop|restart|build|status}"
-        exit 1
-        ;;
+    start)	lets_start ;;
+    stop)	lets_stop ;;
+    restart)    lets_restart ;;
+    build)      lets_build ;;
+    status)	lets_status ;;
+    log)	lets_log ;;
+    *)		echo "Usage: $0 {start|stop|restart|build|status|log}"
+	        exit 1 ;;
 esac
 </INLINE>
 </FILE>
@@ -1013,12 +1016,12 @@ esac
 <!-- Install script -->
 <FILE Run="/bin/bash">
 <INLINE>
-mkdir -p &pluginLOC;/config
-mkdir -p &pluginLOC;/data
-touch "&pluginLOC;/Caddyfile"
-install -m 0755 "&emhttpLOC;/rc.&name;" /usr/local/bin/rc.&name;
-chmod 0755 "&emhttpLOC;/rc.&name;"
-chmod 0755 "&emhttpLOC;/build.sh"
+mkdir -p &bootDir;/config
+mkdir -p &bootDir;/data
+touch "&bootDir;/Caddyfile"
+install -m 0755 "&installDir;/rc.&name;" /usr/local/bin/rc.&name;
+chmod 0755 "&installDir;/rc.&name;"
+chmod 0755 "&installDir;/build.sh"
 
 rc.&name; start
 
@@ -1039,9 +1042,9 @@ printf '%s\n' \
 <INLINE>
 /usr/local/bin/rc.&name; stop
 rm -rf /usr/local/bin/rc.&name;
-rm -rf &emhttpLOC;
-rm -rf &pluginLOC;/config
-rm -rf &pluginLOC;/*.sh
+rm -rf &installDir;
+rm -rf &bootDir;/config
+rm -rf &bootDir;/*.sh
 rm -f /var/run/&name;.pid
 rm -f /var/run/&name;.building
 
@@ -1059,5 +1062,4 @@ printf '%s\n' \
 ### &version;
  - Initial release.
 </CHANGES>
-
 </PLUGIN>
